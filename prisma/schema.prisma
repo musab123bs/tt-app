@@ -13,6 +13,64 @@ enum PlayerRole {
   ADMIN
   COACH
   SCORER
+  SUPER_ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  RESTRICTED
+  DELETED
+}
+
+enum MatchReviewStatus {
+  NONE
+  UNDER_REVIEW
+}
+
+enum AdminAuditAction {
+  USER_ROLE_CHANGED
+  USER_SUSPENDED
+  USER_RESTRICTED
+  USER_REACTIVATED
+  USER_DELETED
+  PLAYER_PROFILE_CORRECTED
+  MATCH_REVIEW_UPDATED
+  MATCH_CANCELLED
+  MATCH_RESULT_CORRECTED
+  TOURNAMENT_CANCELLED
+  TOURNAMENT_UPDATED
+  REPORT_STATUS_CHANGED
+  REPORT_NOTE_ADDED
+  SETTINGS_UPDATED
+}
+
+enum ReportType {
+  INCORRECT_RESULT
+  SUSPICIOUS_ACTIVITY
+  INAPPROPRIATE_PROFILE
+  TOURNAMENT_DISPUTE
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+enum ReportEventKind {
+  CREATED
+  STATUS_CHANGE
+  NOTE
+}
+
+enum ModerationActionType {
+  SUSPEND
+  RESTRICT
+  REACTIVATE
+  DELETE
 }
 
 enum PlayerLevel {
@@ -38,6 +96,7 @@ enum MatchStatus {
   IN_PROGRESS
   COMPLETED
   ABANDONED
+  CANCELLED
 }
 
 enum MatchType {
@@ -99,6 +158,12 @@ enum NotificationType {
   TOURNAMENT_MATCH_SCHEDULED
   TOURNAMENT_COMPLETED
   TOURNAMENT_CANCELLED
+  ACCOUNT_MODERATION
+  MATCH_CORRECTED
+  REPORT_UPDATE
+  ADMIN_NEW_USER
+  ADMIN_REPORT
+  ADMIN_MODERATION
   SYSTEM
 }
 
@@ -127,6 +192,12 @@ model User {
   emailVerified               Boolean                 @default(false)
   image                       String?
   role                        PlayerRole              @default(PLAYER)
+  status                      AccountStatus           @default(ACTIVE)
+  suspendedUntil              DateTime?
+  suspensionReason            String?
+  deletedAt                   DateTime?
+  lastActiveAt                DateTime?
+  isSystemAccount             Boolean                 @default(false)
   createdAt                   DateTime                @default(now())
   updatedAt                   DateTime                @updatedAt
   sessions                    Session[]
@@ -154,6 +225,18 @@ model User {
   tournamentFixturesWon       TournamentFixture[]     @relation("TournamentFixtureWinner")
   tournamentFixturesLost      TournamentFixture[]     @relation("TournamentFixtureLoser")
   notifications               Notification[]
+  adminAuditLogs              AdminAuditLog[]         @relation("AuditAdmin")
+  reportsFiled                UserReport[]            @relation("ReportReporter")
+  reportsAgainst              UserReport[]            @relation("ReportTargetUser")
+  reportsAssigned             UserReport[]            @relation("ReportAssignee")
+  reportEvents                ReportEvent[]
+  moderationActions           ModerationAction[]      @relation("ModerationTarget")
+  moderationActionsTaken      ModerationAction[]      @relation("ModerationAdmin")
+  matchCorrections            MatchCorrection[]
+
+  @@index([role, status])
+  @@index([status, suspendedUntil])
+  @@index([createdAt])
 }
 
 model Session {
@@ -248,9 +331,15 @@ model Match {
   player1TotalPoints Int                @default(0)
   player2TotalPoints Int                @default(0)
   version            Int                @default(0)
+  reviewStatus       MatchReviewStatus  @default(NONE)
+  reviewReason       String?
+  cancelledAt        DateTime?
+  cancellationReason String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   games              MatchGame[]
+  corrections        MatchCorrection[]
+  reports            UserReport[]
   pointHistory       MatchPoint[]
   commands           MatchCommand[]
   tournamentFixture  TournamentFixture?
@@ -258,6 +347,8 @@ model Match {
   @@index([player1Id, status, scheduledAt])
   @@index([player2Id, status, scheduledAt])
   @@index([winnerId, completedAt])
+  @@index([status, scheduledAt])
+  @@index([reviewStatus])
 }
 
 model MatchGame {
@@ -353,6 +444,7 @@ model Tournament {
   participants                 TournamentParticipant[]
   rounds                       TournamentRound[]
   fixtures                     TournamentFixture[]
+  reports                      UserReport[]
 
   @@index([status, registrationDeadline, startDate])
   @@index([createdById, status])
@@ -438,4 +530,96 @@ model Notification {
 
   @@unique([userId, dedupeKey])
   @@index([userId, readAt, createdAt])
+}
+
+model AdminAuditLog {
+  id            String           @id @default(cuid())
+  adminId       String
+  admin         User             @relation("AuditAdmin", fields: [adminId], references: [id], onDelete: Restrict)
+  action        AdminAuditAction
+  targetType    String
+  targetId      String
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+  createdAt     DateTime         @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+model UserReport {
+  id           String        @id @default(cuid())
+  reporterId   String
+  reporter     User          @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  type         ReportType
+  status       ReportStatus  @default(PENDING)
+  description  String
+  targetUserId String?
+  targetUser   User?         @relation("ReportTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  matchId      String?
+  match        Match?        @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  tournamentId String?
+  tournament   Tournament?   @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+  assignedToId String?
+  assignedTo   User?         @relation("ReportAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  resolution   String?
+  resolvedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  events       ReportEvent[]
+
+  @@index([status, createdAt])
+  @@index([type, status])
+  @@index([reporterId, createdAt])
+  @@index([matchId])
+  @@index([tournamentId])
+}
+
+model ReportEvent {
+  id         String          @id @default(cuid())
+  reportId   String
+  report     UserReport      @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  actorId    String
+  actor      User            @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  kind       ReportEventKind
+  fromStatus ReportStatus?
+  toStatus   ReportStatus?
+  note       String?
+  internal   Boolean         @default(true)
+  createdAt  DateTime        @default(now())
+
+  @@index([reportId, createdAt])
+}
+
+model ModerationAction {
+  id        String               @id @default(cuid())
+  userId    String
+  user      User                 @relation("ModerationTarget", fields: [userId], references: [id], onDelete: Restrict)
+  adminId   String
+  admin     User                 @relation("ModerationAdmin", fields: [adminId], references: [id], onDelete: Restrict)
+  action    ModerationActionType
+  reason    String
+  startsAt  DateTime             @default(now())
+  endsAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+model MatchCorrection {
+  id             String   @id @default(cuid())
+  matchId        String
+  match          Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  adminId        String
+  admin          User     @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  reason         String
+  previousResult Json
+  newResult      Json
+  createdAt      DateTime @default(now())
+
+  @@index([matchId, createdAt])
 }

@@ -90,3 +90,29 @@ npm run start
 - The home page is a professional landing screen.
 - The dashboard page is a placeholder layout foundation for later feature phases.
 - The `/api/health` route checks the database connection and returns a 503 if the database is unavailable.
+
+## Super Admin panel (Phase 7)
+
+The admin panel lives at `/admin` and is only available to accounts with the `SUPER_ADMIN` role. Every admin page and `/api/admin/*` endpoint re-checks the role on the server.
+
+1. Apply migrations: `npm run db:migrate`
+2. Register a normal account through `/register`.
+3. Promote it from a terminal on the server (the role can never be self-assigned in the app):
+
+```bash
+npm run admin:promote -- you@example.com
+```
+
+4. Sign out and back in. An **Admin panel** link appears in the sidebar.
+
+Promoted accounts are marked as protected system accounts, so other admins cannot suspend, delete or demote them from the panel.
+
+Platform settings (match formats, tournament defaults, ranking minimum, profile fields) are stored in the `SystemSetting` table. `LEADERBOARD_MIN_MATCHES` is only used as the default until settings are saved.
+
+Rate limiting for admin actions and player reports is in-memory (single Node process).
+
+## Tests
+
+```bash
+npm test
+```

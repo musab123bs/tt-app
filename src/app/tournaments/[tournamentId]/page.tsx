@@ -73,6 +73,7 @@ export default async function TournamentDetailPage({ params }: { params: Promise
           <h2 className="text-lg font-semibold">{tournament.format === "SINGLE_ELIMINATION" ? "Bracket" : "Fixtures and results"}</h2>
           <TournamentFixtures rounds={tournament.rounds} format={tournament.format} tournamentId={tournament.id} canSchedule={tournament.isOrganizer && !finished} />
         </div>
+        <p className="text-sm text-slate-500">Problem with this tournament? <Link href={`/reports?type=TOURNAMENT_DISPUTE&tournamentId=${tournament.id}`} className="text-blue-700 hover:underline">Report a dispute</Link></p>
         {tournament.rules && <div className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Rules</h2><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{tournament.rules}</p></div>}
       </section>
       <aside className="space-y-5">

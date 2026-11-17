@@ -28,7 +28,7 @@ const when = (value: string | null) => value ? new Intl.DateTimeFormat("en", { d
 
 function FixtureCard({ fixture, tournamentId, canSchedule }: { fixture: Fixture; tournamentId: string; canSchedule: boolean }) {
   const player = (slot: Fixture["player1"], other: Fixture["player2"]) => slot?.name ?? (fixture.status === "BYE" && other ? "Bye" : "TBD");
-  const schedulable = canSchedule && fixture.player1 && fixture.player2 && ["PENDING", "SCHEDULED"].includes(fixture.status) && (!fixture.match || ["SCHEDULED", "ABANDONED"].includes(fixture.match.status));
+  const schedulable = canSchedule && fixture.player1 && fixture.player2 && ["PENDING", "SCHEDULED"].includes(fixture.status) && (!fixture.match || ["SCHEDULED", "ABANDONED", "CANCELLED"].includes(fixture.match.status));
   return <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 space-y-1 text-sm">

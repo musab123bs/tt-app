@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import {
   Bell,
   BarChart3,
+  Flag,
+  ShieldCheck,
   Medal,
   ChartNoAxesCombined,
   House,
@@ -14,6 +16,8 @@ import {
 } from "lucide-react";
 import type { RefObject } from "react";
 
+import { authClient } from "@/lib/auth-client";
+
 const navigation = [
   { label: "Dashboard", href: "/dashboard", icon: House, available: true },
   { label: "My Profile", href: "/profile", icon: UserRound, available: true },
@@ -22,6 +26,7 @@ const navigation = [
   { label: "Tournaments", href: "/tournaments", icon: Medal, available: true },
   { label: "Rankings", href: "/leaderboard", icon: ChartNoAxesCombined, available: true },
   { label: "Notifications", href: "/notifications", icon: Bell, available: true },
+  { label: "Report an issue", href: "/reports", icon: Flag, available: true },
   { label: "Settings", icon: Settings, available: false },
 ] as const;
 
@@ -33,6 +38,9 @@ type SidebarProps = {
 
 function NavigationContent({ onClose }: { onClose?: () => void }) {
   const pathname = usePathname();
+  const { data: session } = authClient.useSession();
+  // UI hint only: every admin route and API re-checks the role on the server.
+  const isSuperAdmin = (session?.user as { role?: string } | undefined)?.role === "SUPER_ADMIN";
 
   return (
     <>
@@ -85,6 +93,12 @@ function NavigationContent({ onClose }: { onClose?: () => void }) {
             </button>
           );
         })}
+        {isSuperAdmin && (
+          <Link href="/admin" onClick={onClose} className="mt-2 flex items-center gap-3 rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-medium text-white hover:bg-slate-800">
+            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+            Admin panel
+          </Link>
+        )}
       </nav>
 
       <div className="mt-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">

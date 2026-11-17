@@ -45,6 +45,7 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ p
       <AdvancedAnalyticsCharts buckets={data.buckets} wins={totals.won} losses={totals.lost} />
       <div className="mt-6"><RecentAnalyticsMatches matches={data.recentMatches} linkMatchDetails={false} /></div>
       <PlayerTournamentHistorySection history={tournamentHistory} />
+      {session && session.user.id !== playerId && <p className="mt-6 text-sm text-slate-500">See something inappropriate? <Link href={`/reports?type=INAPPROPRIATE_PROFILE&userId=${playerId}`} className="text-blue-700 hover:underline">Report this profile</Link></p>}
     </div>
   </main>;
 }

@@ -11,6 +11,9 @@ import {
 import { getPrismaClient } from "@/lib/prisma";
 import { createTournamentFixtureMatch, forfeitTournamentParticipant } from "@/lib/services/tournament-match-sync";
 import { notifyUsers } from "@/lib/services/notifications";
+import { AccountRestrictedError, assertAccountActive } from "@/lib/services/account-status";
+import { getPlatformSettings } from "@/lib/services/platform-settings";
+import { isAdminRole } from "@/lib/roles";
 import type { z } from "zod";
 import { tournamentCreateSchema } from "@/lib/tournaments/validation";
 
@@ -22,6 +25,15 @@ export class TournamentError extends Error {
 }
 
 type CreateTournament = z.infer<typeof tournamentCreateSchema>;
+
+async function ensureActive(userId: string) {
+  try {
+    await assertAccountActive(userId);
+  } catch (error) {
+    if (error instanceof AccountRestrictedError) throw new TournamentError(error.message, 403);
+    throw error;
+  }
+}
 
 function getTieBreakOrder(value?: string): TieBreakRule[] {
   const allowed = new Set<string>(DEFAULT_TIE_BREAK_ORDER);
@@ -35,7 +47,7 @@ async function assertOrganizer(userId: string, tournamentId: string, db?: Prisma
   const tournament = await tx.tournament.findUnique({ where: { id: tournamentId }, select: { id: true, createdById: true, status: true, drawGeneratedAt: true } });
   if (!tournament) throw new TournamentError("Tournament not found.", 404);
   const user = await tx.user.findUnique({ where: { id: userId }, select: { role: true } });
-  if (tournament.createdById !== userId && user?.role !== "ADMIN") throw new TournamentError("Only this tournament's organizer or an administrator can do that.", 403);
+  if (tournament.createdById !== userId && !isAdminRole(user?.role)) throw new TournamentError("Only this tournament's organizer or an administrator can do that.", 403);
   return tournament;
 }
 
@@ -253,7 +265,11 @@ export async function createTournament(userId: string, input: CreateTournament) 
   const prisma = getPrismaClient();
   if (!prisma) throw new TournamentError("Database unavailable.", 503);
   const dates = { startDate: new Date(input.startDate), endDate: new Date(input.endDate), registrationDeadline: new Date(input.registrationDeadline), minParticipants: input.minParticipants, maxParticipants: input.maxParticipants };
+  await ensureActive(userId);
   validateTournamentDates(dates);
+  const settings = await getPlatformSettings();
+  if (!settings.tournament.availableFormats.includes(input.format)) throw new TournamentError("This tournament format is not currently available.", 400);
+  if (!settings.match.availableBestOf.includes(input.bestOf)) throw new TournamentError(`Best of ${input.bestOf} matches are not currently available.`, 400);
   if (dates.startDate <= new Date()) throw new TournamentError("Tournament start must be in the future.", 400);
   if (input.status === "OPEN_REGISTRATION" && dates.registrationDeadline <= new Date()) throw new TournamentError("Open registration needs a future deadline.", 400);
   const data = await prisma.tournament.create({
@@ -338,6 +354,7 @@ export async function registerForTournament(userId: string, tournamentId: string
     prisma.tournament.findUnique({ where: { id: tournamentId } }),
   ]);
   if (!user || user.role !== "PLAYER") throw new TournamentError("Only registered players can enter tournaments.", 403);
+  await ensureActive(userId);
   if (!tournament) throw new TournamentError("Tournament not found.", 404);
   const now = new Date();
   if (tournament.status !== "OPEN_REGISTRATION" || now >= tournament.registrationDeadline) throw new TournamentError("Registration is closed.", 409);
@@ -450,7 +467,7 @@ export async function generateTournamentDraw(userId: string, tournamentId: strin
     });
     if (!tournament) throw new TournamentError("Tournament not found.", 404);
     const user = await tx.user.findUnique({ where: { id: userId }, select: { role: true } });
-    if (tournament.createdById !== userId && user?.role !== "ADMIN") throw new TournamentError("Only the organizer can generate this draw.", 403);
+    if (tournament.createdById !== userId && !isAdminRole(user?.role)) throw new TournamentError("Only the organizer can generate this draw.", 403);
     const existingFixtures = await tx.tournamentFixture.count({ where: { tournamentId } });
     if (tournament.drawGeneratedAt || existingFixtures) throw new TournamentError("The draw has already been generated and cannot be replaced.", 409);
     if (tournament.status !== "REGISTRATION_CLOSED" && !(tournament.status === "OPEN_REGISTRATION" && tournament.registrationDeadline <= new Date())) {
@@ -510,7 +527,7 @@ export async function scheduleTournamentFixture(userId: string, tournamentId: st
     }
     if (fixture.status === "COMPLETED" || fixture.status === "BYE" || fixture.status === "FORFEIT" || fixture.status === "CANCELLED") throw new TournamentError("This fixture can no longer be scheduled.", 409);
     if (!fixture.player1Id || !fixture.player2Id) throw new TournamentError("Both players must be determined before scheduling this match.", 409);
-    if (fixture.match && fixture.match.status !== "ABANDONED") {
+    if (fixture.match && fixture.match.status !== "ABANDONED" && fixture.match.status !== "CANCELLED") {
       if (fixture.match.status !== "SCHEDULED") throw new TournamentError("A match can only be rescheduled before it starts.", 409);
       await tx.match.update({ where: { id: fixture.match.id }, data: { scheduledAt } });
       await notifyScheduled(tx, fixture.tournament, [fixture.player1Id, fixture.player2Id], fixture.id, scheduledAt);
