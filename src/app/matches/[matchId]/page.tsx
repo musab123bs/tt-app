@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
@@ -21,6 +22,7 @@ export default async function MatchDetailPage({
     <DashboardShell playerName={session.user.name ?? "Player"} playerImage={session.user.image ?? null}>
       <main className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6 lg:p-8">
         <LiveMatchScoreboard initialMatch={match} />
+        <p className="text-sm text-slate-500">Is this result wrong or suspicious? <Link href={`/reports?type=INCORRECT_RESULT&matchId=${match.id}`} className="text-blue-700 hover:underline">Report this match</Link></p>
       </main>
     </DashboardShell>
   );

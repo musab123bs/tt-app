@@ -105,7 +105,7 @@ function PlayerAvatar({ name, image }: { name: string; image: string | null }) {
 
 function StatusLabel({ status, result }: { status: MatchSummary["status"]; result: string | null }) {
   const label = result ?? (status === "IN_PROGRESS" ? "In progress" : status[0] + status.slice(1).toLowerCase());
-  const color = result === "Won" ? "bg-emerald-50 text-emerald-700" : result === "Lost" ? "bg-rose-50 text-rose-700" : status === "IN_PROGRESS" ? "bg-amber-50 text-amber-800" : status === "ABANDONED" ? "bg-slate-100 text-slate-500" : "bg-blue-50 text-blue-700";
+  const color = result === "Won" ? "bg-emerald-50 text-emerald-700" : result === "Lost" ? "bg-rose-50 text-rose-700" : status === "IN_PROGRESS" ? "bg-amber-50 text-amber-800" : status === "ABANDONED" || status === "CANCELLED" ? "bg-slate-100 text-slate-500" : "bg-blue-50 text-blue-700";
   return <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${color}`}>{label}</span>;
 }
 

@@ -6,6 +6,8 @@ import { matchErrorResponse, readJson } from "@/lib/matches/api";
 import { getCurrentSession } from "@/lib/session";
 import { getAccessibleMatch, getPlayerMatchList } from "@/lib/services/matches";
 import { getPrismaClient } from "@/lib/prisma";
+import { AccountRestrictedError, assertAccountActive } from "@/lib/services/account-status";
+import { getPlatformSettings } from "@/lib/services/platform-settings";
 
 export async function GET(request: Request) {
   const session = await getCurrentSession();
@@ -70,6 +72,17 @@ export async function POST(request: Request) {
     });
     if (!opponent || opponent.role !== "PLAYER" || !opponent.playerProfile?.isPublic) {
       return NextResponse.json({ error: "Choose an available registered player." }, { status: 400 });
+    }
+
+    try {
+      await assertAccountActive(session.user.id);
+    } catch (error) {
+      if (error instanceof AccountRestrictedError) return NextResponse.json({ error: error.message }, { status: 403 });
+      throw error;
+    }
+    const settings = await getPlatformSettings();
+    if (!settings.match.availableBestOf.includes(parsed.data.bestOf)) {
+      return NextResponse.json({ error: `Best of ${parsed.data.bestOf} matches are not currently available.` }, { status: 400 });
     }
 
     const created = await prisma.match.create({

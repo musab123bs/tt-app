@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
+import { AccountRestrictedError, assertAccountActive } from "@/lib/services/account-status";
 import { v2 as cloudinary } from "cloudinary";
 
 import { auth } from "@/lib/auth";
@@ -22,6 +23,13 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await assertAccountActive(session.user.id);
+  } catch (error) {
+    if (error instanceof AccountRestrictedError) return NextResponse.json({ error: error.message }, { status: 403 });
+    throw error;
   }
 
   const useLocalStorage = process.env.NODE_ENV !== "production";

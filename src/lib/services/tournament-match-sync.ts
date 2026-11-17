@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma, TournamentFixtureStatus, TournamentStatus } from "@/generated/prisma";
 import { getNextEliminationSlot, calculateRoundRobinStandings } from "@/lib/tournaments/formats";
 import type { TournamentError } from "@/lib/services/tournaments";
+import { notifyUsers } from "@/lib/services/notifications";
 
 type Tx = Prisma.TransactionClient;
 
@@ -30,7 +31,31 @@ export async function createTournamentFixtureMatch(
     where: { id: fixture.id },
     data: { matchId: match.id, scheduledAt, status: "SCHEDULED", version: { increment: 1 } },
   });
+  await notifyUsers(tx, [fixture.player1Id, fixture.player2Id], {
+    type: "TOURNAMENT_MATCH_SCHEDULED",
+    title: `Your next match in ${tournament.name} is ready`,
+    body: `Scheduled for ${scheduledAt.toUTCString()}.`,
+    link: `/matches/${match.id}`,
+    dedupeKey: `fixture-match:${fixture.id}:${match.id}`,
+  });
   return match;
+}
+
+async function notifyTournamentCompleted(tx: Tx, tournamentId: string, winnerId: string | null) {
+  const [tournament, participants, winner] = await Promise.all([
+    tx.tournament.findUnique({ where: { id: tournamentId }, select: { name: true, createdById: true } }),
+    tx.tournamentParticipant.findMany({ where: { tournamentId, status: { in: ["APPROVED", "WITHDRAWN", "REMOVED"] } }, select: { userId: true } }),
+    winnerId ? tx.user.findUnique({ where: { id: winnerId }, select: { name: true, playerProfile: { select: { fullName: true } } } }) : null,
+  ]);
+  if (!tournament) return;
+  const winnerName = winner?.playerProfile?.fullName?.trim() || winner?.name;
+  await notifyUsers(tx, [tournament.createdById, ...participants.map((participant) => participant.userId)], {
+    type: "TOURNAMENT_COMPLETED",
+    title: `${tournament.name} is complete`,
+    body: winnerName ? `Champion: ${winnerName}.` : "Final results are available.",
+    link: `/tournaments/${tournamentId}`,
+    dedupeKey: `completed:${tournamentId}`,
+  });
 }
 
 async function updateRoundStatus(tx: Tx, roundId: string) {
@@ -75,6 +100,7 @@ async function completeRoundRobinTournament(tx: Tx, tournamentId: string) {
       runnerUpId: standings[1]?.playerId ?? null,
     },
   });
+  await notifyTournamentCompleted(tx, tournamentId, standings[0]?.playerId ?? null);
 }
 
 async function advanceEliminationWinner(tx: Tx, fixtureId: string, winnerId: string, loserId: string | null) {
@@ -89,6 +115,7 @@ async function advanceEliminationWinner(tx: Tx, fixtureId: string, winnerId: str
       where: { id: fixture.tournamentId },
       data: { status: "COMPLETED", completedAt: new Date(), winnerId, runnerUpId: loserId },
     });
+    await notifyTournamentCompleted(tx, fixture.tournamentId, winnerId);
     return;
   }
   const nextLocation = getNextEliminationSlot(fixture.position);

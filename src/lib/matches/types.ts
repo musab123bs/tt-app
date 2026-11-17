@@ -1,4 +1,4 @@
-export type MatchStatus = "SCHEDULED" | "IN_PROGRESS" | "COMPLETED" | "ABANDONED";
+export type MatchStatus = "SCHEDULED" | "IN_PROGRESS" | "COMPLETED" | "ABANDONED" | "CANCELLED";
 
 export type MatchPlayer = {
   id: string;

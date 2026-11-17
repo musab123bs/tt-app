@@ -13,6 +13,7 @@ import {
   type LeaderboardPeriod,
 } from "@/lib/analytics/calculations";
 import { getPrismaClient } from "@/lib/prisma";
+import { getPlatformSettings } from "@/lib/services/platform-settings";
 
 const completedMatchSelect = {
   id: true,
@@ -184,9 +185,8 @@ export async function getHeadToHeadAnalytics(playerAId: string, playerBId: strin
   };
 }
 
-function getMinimumMatchRequirement() {
-  const value = Number(process.env.LEADERBOARD_MIN_MATCHES ?? 5);
-  return Number.isInteger(value) && value >= 1 ? value : 5;
+async function getMinimumMatchRequirement() {
+  return (await getPlatformSettings()).ranking.minCompletedMatches;
 }
 
 export async function getPlayerLeaderboard(period: LeaderboardPeriod, now = new Date()) {
@@ -215,7 +215,7 @@ export async function getPlayerLeaderboard(period: LeaderboardPeriod, now = new 
     const record = completedRecord(match);
     return record ? [record] : [];
   });
-  const minimumMatches = getMinimumMatchRequirement();
+  const minimumMatches = await getMinimumMatchRequirement();
   const totals = players.map((player) => ({
     id: player.id,
     name: player.playerProfile?.fullName?.trim() || player.name,

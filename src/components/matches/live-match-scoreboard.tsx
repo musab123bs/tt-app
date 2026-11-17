@@ -236,6 +236,12 @@ export function LiveMatchScoreboard({ initialMatch }: LiveMatchScoreboardProps) 
           </div>
         )}
 
+        {match.status === "CANCELLED" && (
+          <div className="border-t border-slate-100 bg-slate-50 px-4 py-5 text-center text-sm text-slate-600 sm:px-6">
+            This match was cancelled by an administrator and is excluded from player statistics.
+          </div>
+        )}
+
         {match.status === "ABANDONED" && (
           <div className="border-t border-slate-100 bg-slate-50 px-4 py-5 text-center text-sm text-slate-600 sm:px-6">
             This match was abandoned. Its partial score is excluded from player statistics.
@@ -252,7 +258,7 @@ export function LiveMatchScoreboard({ initialMatch }: LiveMatchScoreboardProps) 
             <h2 className="text-lg font-semibold text-slate-900">Scorecard and point history</h2>
             <p className="mt-1 text-sm text-slate-500">Point edits and undo actions are saved as an auditable history.</p>
           </div>
-          {match.status !== "COMPLETED" && match.status !== "ABANDONED" && (match.status === "SCHEDULED" || currentGame) && (
+          {match.status !== "COMPLETED" && match.status !== "ABANDONED" && match.status !== "CANCELLED" && (match.status === "SCHEDULED" || currentGame) && (
             <button type="button" disabled={busy} onClick={abandonMatch} className="rounded-full px-3 py-2 text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50">
               Abandon match
             </button>
@@ -348,6 +354,7 @@ function StatusPill({ status }: { status: MatchDetailView["status"] }) {
     IN_PROGRESS: "bg-amber-50 text-amber-800",
     COMPLETED: "bg-emerald-50 text-emerald-800",
     ABANDONED: "bg-slate-100 text-slate-600",
+    CANCELLED: "bg-red-50 text-red-700",
   }[status];
   const label = status === "IN_PROGRESS" ? "In progress" : status[0] + status.slice(1).toLowerCase();
   return <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${classes}`}>{label}</span>;
