@@ -7,6 +7,8 @@ import { MetricCard, RecentAnalyticsMatches, RecentForm, StreakCards } from "@/c
 import { Card } from "@/components/ui/card";
 import { requireUser } from "@/lib/session";
 import { getPlayerAnalytics } from "@/lib/services/analytics";
+import { getPlayerTournamentHistory } from "@/lib/services/tournament-history";
+import { PlayerTournamentHistorySection } from "@/components/tournaments/player-tournament-history";
 
 export const instant = false;
 
@@ -17,6 +19,7 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ p
     getPlayerAnalytics(playerId, null, "all"),
   ]);
   if (!data) notFound();
+  const tournamentHistory = await getPlayerTournamentHistory(playerId, session?.user.id);
   const totals = data.totals;
   const compareHref = session ? `/compare?playerB=${encodeURIComponent(playerId)}` : "/login";
 
@@ -41,6 +44,7 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ p
       <div className="mt-5 grid gap-4 lg:grid-cols-2"><RecentForm results={totals.recent5} label="Last 5 completed matches" /><RecentForm results={totals.recent10} label="Last 10 completed matches" /></div>
       <AdvancedAnalyticsCharts buckets={data.buckets} wins={totals.won} losses={totals.lost} />
       <div className="mt-6"><RecentAnalyticsMatches matches={data.recentMatches} linkMatchDetails={false} /></div>
+      <PlayerTournamentHistorySection history={tournamentHistory} />
     </div>
   </main>;
 }

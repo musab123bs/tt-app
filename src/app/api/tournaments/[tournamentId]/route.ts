@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/lib/session";
-import { getTournamentDetail, updateTournament, TournamentError } from "@/lib/services/tournaments";
+import { deleteDraftTournament, getTournamentDetail, updateTournament, TournamentError } from "@/lib/services/tournaments";
 import { tournamentUpdateSchema } from "@/lib/tournaments/validation";
 
 type Context = { params: Promise<{ tournamentId: string }> };
@@ -19,4 +19,11 @@ export async function PATCH(request: Request, { params }: Context) {
   const { tournamentId } = await params;
   try { return NextResponse.json({ tournament: await updateTournament(session.user.id, tournamentId, parsed.data) }); }
   catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to update tournament." }, { status: error instanceof TournamentError ? error.status : 500 }); }
+}
+export async function DELETE(_request: Request, { params }: Context) {
+  const session = await getCurrentSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { tournamentId } = await params;
+  try { return NextResponse.json(await deleteDraftTournament(session.user.id, tournamentId)); }
+  catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to delete tournament." }, { status: error instanceof TournamentError ? error.status : 500 }); }
 }

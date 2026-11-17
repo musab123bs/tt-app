@@ -91,6 +91,17 @@ enum TournamentRoundStatus {
   COMPLETED
 }
 
+enum NotificationType {
+  TOURNAMENT_REGISTRATION
+  TOURNAMENT_REGISTRATION_REVIEW
+  TOURNAMENT_REGISTRATION_CLOSED
+  TOURNAMENT_DRAW
+  TOURNAMENT_MATCH_SCHEDULED
+  TOURNAMENT_COMPLETED
+  TOURNAMENT_CANCELLED
+  SYSTEM
+}
+
 enum TournamentFixtureStatus {
   PENDING
   SCHEDULED
@@ -142,6 +153,7 @@ model User {
   tournamentFixturesAsPlayer2 TournamentFixture[]     @relation("TournamentFixturePlayer2")
   tournamentFixturesWon       TournamentFixture[]     @relation("TournamentFixtureWinner")
   tournamentFixturesLost      TournamentFixture[]     @relation("TournamentFixtureLoser")
+  notifications               Notification[]
 }
 
 model Session {
@@ -410,4 +422,20 @@ model TournamentFixture {
   @@index([tournamentId, status, scheduledAt])
   @@index([player1Id, status])
   @@index([player2Id, status])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String?
+  link      String?
+  dedupeKey String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt, createdAt])
 }

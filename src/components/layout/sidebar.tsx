@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
   BarChart3,
+  Medal,
   ChartNoAxesCombined,
   House,
   Settings,
@@ -17,7 +19,9 @@ const navigation = [
   { label: "My Profile", href: "/profile", icon: UserRound, available: true },
   { label: "My Matches", href: "/matches", icon: Trophy, available: true },
   { label: "Statistics", href: "/analytics", icon: BarChart3, available: true },
+  { label: "Tournaments", href: "/tournaments", icon: Medal, available: true },
   { label: "Rankings", href: "/leaderboard", icon: ChartNoAxesCombined, available: true },
+  { label: "Notifications", href: "/notifications", icon: Bell, available: true },
   { label: "Settings", icon: Settings, available: false },
 ] as const;
 

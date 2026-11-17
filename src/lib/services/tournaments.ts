@@ -1,7 +1,8 @@
 import "server-only";
 
-import { Prisma, TournamentFixtureStatus, TournamentParticipantStatus, TournamentStatus } from "@/generated/prisma";
+import { Prisma, TournamentFixtureStatus, TournamentParticipantStatus, TournamentStatus, type PrismaClient } from "@/generated/prisma";
 import {
+  calculateRoundRobinStandings,
   DEFAULT_TIE_BREAK_ORDER,
   generateRoundRobinDraw,
   generateSingleEliminationDraw,
@@ -9,6 +10,7 @@ import {
 } from "@/lib/tournaments/formats";
 import { getPrismaClient } from "@/lib/prisma";
 import { createTournamentFixtureMatch, forfeitTournamentParticipant } from "@/lib/services/tournament-match-sync";
+import { notifyUsers } from "@/lib/services/notifications";
 import type { z } from "zod";
 import { tournamentCreateSchema } from "@/lib/tournaments/validation";
 
@@ -27,8 +29,8 @@ function getTieBreakOrder(value?: string): TieBreakRule[] {
   return parsed.length ? parsed : [...DEFAULT_TIE_BREAK_ORDER];
 }
 
-async function assertOrganizer(userId: string, tournamentId: string, tx?: NonNullable<ReturnType<typeof getPrismaClient>> | Prisma.TransactionClient) {
-  tx ??= getPrismaClient();
+async function assertOrganizer(userId: string, tournamentId: string, db?: PrismaClient | Prisma.TransactionClient) {
+  const tx = db ?? getPrismaClient();
   if (!tx) throw new TournamentError("Database unavailable.", 503);
   const tournament = await tx.tournament.findUnique({ where: { id: tournamentId }, select: { id: true, createdById: true, status: true, drawGeneratedAt: true } });
   if (!tournament) throw new TournamentError("Tournament not found.", 404);
@@ -57,7 +59,7 @@ export async function getTournaments(options: { userId?: string; scope?: "all" |
   if (options.scope === "mine" && !options.userId) throw new TournamentError("Sign in to view your tournaments.", 401);
   const where: Prisma.TournamentWhereInput = options.scope === "mine"
     ? { OR: [{ createdById: options.userId }, { participants: { some: { userId: options.userId, status: { in: ["PENDING", "APPROVED"] } } } }] }
-    : { status: { not: "DRAFT" } };
+    : { OR: [{ status: { not: "DRAFT" } }, ...(options.userId ? [{ createdById: options.userId }] : [])] };
   const tournaments = await prisma.tournament.findMany({
     where,
     include: {
@@ -74,6 +76,11 @@ export async function getTournaments(options: { userId?: string; scope?: "all" |
     _count: { _all: true },
   });
   const participantCount = new Map(counts.map((count) => [count.tournamentId, count._count._all]));
+  const myRegistrations = options.userId ? await prisma.tournamentParticipant.findMany({
+    where: { userId: options.userId, tournamentId: { in: tournaments.map((tournament) => tournament.id) } },
+    select: { tournamentId: true, status: true },
+  }) : [];
+  const myStatus = new Map(myRegistrations.map((registration) => [registration.tournamentId, registration.status]));
   return tournaments.map((tournament) => ({
     id: tournament.id,
     name: tournament.name,
@@ -94,10 +101,12 @@ export async function getTournaments(options: { userId?: string; scope?: "all" |
     winnerName: tournament.winner?.name ?? null,
     participantCount: participantCount.get(tournament.id) ?? 0,
     fixtureCount: tournament._count.fixtures,
+    runnerUpId: tournament.runnerUpId,
+    myRegistrationStatus: myStatus.get(tournament.id) ?? null,
   }));
 }
 
-export async function getTournamentDetail(tournamentId: string, viewerId?: string) {
+export async function getTournamentDetail(tournamentId: string, viewerId?: string, viewerIsAdmin = false) {
   const prisma = getPrismaClient();
   if (!prisma) throw new TournamentError("Database unavailable.", 503);
   const tournament = await prisma.tournament.findUnique({
@@ -108,7 +117,7 @@ export async function getTournamentDetail(tournamentId: string, viewerId?: strin
       runnerUp: { select: { id: true, name: true, playerProfile: { select: { fullName: true, isPublic: true } } } },
       participants: {
         where: viewerId
-          ? { OR: [{ status: "APPROVED" }, { userId: viewerId }, ...(viewerId ? [{ tournament: { createdById: viewerId }, status: { in: ["PENDING", "REJECTED", "WITHDRAWN", "REMOVED"] as TournamentParticipantStatus[] } }] : [])] }
+          ? viewerIsAdmin ? {} : { OR: [{ status: "APPROVED" }, { userId: viewerId }, { tournament: { createdById: viewerId }, status: { in: ["PENDING", "REJECTED", "WITHDRAWN", "REMOVED"] as TournamentParticipantStatus[] } }] }
           : { status: "APPROVED" },
         include: { user: { select: { id: true, name: true, image: true, playerProfile: { select: { fullName: true, profileImage: true, isPublic: true, level: true } } } } },
         orderBy: [{ seed: "asc" }, { registeredAt: "asc" }],
@@ -131,7 +140,9 @@ export async function getTournamentDetail(tournamentId: string, viewerId?: strin
     },
   });
   if (!tournament) return null;
-  const isOrganizer = viewerId === tournament.createdById;
+  if (tournament.status === "DRAFT" && viewerId !== tournament.createdById && !viewerIsAdmin) return null;
+  const isOrganizer = viewerId === tournament.createdById || viewerIsAdmin;
+  const standings = tournament.format === "ROUND_ROBIN" && tournament.drawGeneratedAt ? await getRoundRobinStandings(tournament.id, getTieBreakOrder(tournament.tieBreakOrder)) : [];
   return {
     id: tournament.id,
     createdById: tournament.createdById,
@@ -156,6 +167,7 @@ export async function getTournamentDetail(tournamentId: string, viewerId?: strin
     winner: tournament.winner ? { id: tournament.winner.id, name: tournament.winner.playerProfile?.isPublic ? tournament.winner.playerProfile.fullName?.trim() || tournament.winner.name : "Private player" } : null,
     runnerUp: tournament.runnerUp ? { id: tournament.runnerUp.id, name: tournament.runnerUp.playerProfile?.isPublic ? tournament.runnerUp.playerProfile.fullName?.trim() || tournament.runnerUp.name : "Private player" } : null,
     isOrganizer,
+    standings,
     myRegistration: tournament.participants.find((participant) => participant.userId === viewerId) ?? null,
     participants: tournament.participants.map((participant) => ({
       id: participant.id,
@@ -201,6 +213,31 @@ export async function getTournamentDetail(tournamentId: string, viewerId?: strin
       })),
     })),
   };
+}
+
+async function getRoundRobinStandings(tournamentId: string, tieBreakOrder: TieBreakRule[]) {
+  const prisma = getPrismaClient();
+  if (!prisma) throw new TournamentError("Database unavailable.", 503);
+  const [participants, fixtures] = await Promise.all([
+    prisma.tournamentParticipant.findMany({
+      where: { tournamentId, status: { in: ["APPROVED", "WITHDRAWN", "REMOVED"] } },
+      include: { user: { select: { id: true, name: true, image: true, playerProfile: { select: { fullName: true, profileImage: true, isPublic: true } } } } },
+    }),
+    prisma.tournamentFixture.findMany({
+      where: { tournamentId },
+      select: { player1Id: true, player2Id: true, winnerId: true, status: true, match: { select: { player1GamesWon: true, player2GamesWon: true, player1TotalPoints: true, player2TotalPoints: true } } },
+    }),
+  ]);
+  const scheduled = new Set(fixtures.flatMap((fixture) => [fixture.player1Id, fixture.player2Id]).filter(Boolean));
+  return calculateRoundRobinStandings(
+    participants.filter((participant) => scheduled.has(participant.userId)).map((participant) => ({
+      playerId: participant.userId,
+      name: participant.user.playerProfile?.fullName?.trim() || participant.user.name,
+      image: participant.user.playerProfile?.isPublic ? participant.user.playerProfile.profileImage || participant.user.image : null,
+    })),
+    fixtures,
+    tieBreakOrder,
+  );
 }
 
 function serializeTournamentFixturePlayer(player: { id: string; name: string; image: string | null; playerProfile: { fullName: string; profileImage: string | null; isPublic: boolean } | null } | null) {
@@ -263,7 +300,8 @@ export async function updateTournament(userId: string, tournamentId: string, inp
   const maxParticipants = typeof input.maxParticipants === "number" ? input.maxParticipants : tournament.maxParticipants;
   validateTournamentDates({ startDate, endDate, registrationDeadline, minParticipants, maxParticipants });
   const hasRegistrations = await prisma.tournamentParticipant.count({ where: { tournamentId, status: { in: ["PENDING", "APPROVED"] } } });
-  if (hasRegistrations && ["format", "maxParticipants", "minParticipants", "bestOf", "registrationRequiresApproval"].some((key) => input[key] !== undefined)) {
+  const lockedKeys = ["format", "maxParticipants", "minParticipants", "bestOf", "registrationRequiresApproval"] as const;
+  if (hasRegistrations && lockedKeys.some((key) => input[key] !== undefined && input[key] !== tournament[key])) {
     throw new TournamentError("Format and participant settings cannot change after players register.", 409);
   }
   if (input.status === "DRAFT" && hasRegistrations) throw new TournamentError("Withdraw or reject current registrations before reopening a draft.", 409);
@@ -306,10 +344,22 @@ export async function registerForTournament(userId: string, tournamentId: string
   const activeCount = await prisma.tournamentParticipant.count({ where: { tournamentId, status: { in: ["PENDING", "APPROVED"] } } });
   if (activeCount >= tournament.maxParticipants) throw new TournamentError("This tournament has reached its participant limit.", 409);
   try {
-    return await prisma.tournamentParticipant.create({
+    const participant = await prisma.tournamentParticipant.create({
       data: { tournamentId, userId, status: tournament.registrationRequiresApproval ? "PENDING" : "APPROVED" },
       select: { id: true, status: true, registeredAt: true },
     });
+    const link = `/tournaments/${tournamentId}`;
+    await notifyUsers(prisma, [userId], {
+      type: "TOURNAMENT_REGISTRATION",
+      title: participant.status === "PENDING" ? `Registration submitted for ${tournament.name}` : `You're registered for ${tournament.name}`,
+      body: participant.status === "PENDING" ? "The organizer will review your registration." : "Your place in the tournament is confirmed.",
+      link,
+      dedupeKey: `registration:${participant.id}:${participant.status}`,
+    });
+    if (participant.status === "PENDING") {
+      await notifyUsers(prisma, [tournament.createdById], { type: "TOURNAMENT_REGISTRATION", title: `New registration request for ${tournament.name}`, link, dedupeKey: `registration-request:${participant.id}` });
+    }
+    return participant;
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new TournamentError("You have already registered for this tournament.", 409);
     throw error;
@@ -354,6 +404,17 @@ export async function reviewTournamentRegistration(userId: string, tournamentId:
     if (input.decision === "REMOVE" && tournament.drawGeneratedAt) {
       await forfeitTournamentParticipant(tx, tournamentId, participant.userId, input.reason!.trim());
     }
+    if (input.decision !== "APPROVE" || participant.status === "PENDING") {
+      const name = (await tx.tournament.findUniqueOrThrow({ where: { id: tournamentId }, select: { name: true } })).name;
+      const verb = input.decision === "APPROVE" ? "approved" : input.decision === "REJECT" ? "rejected" : "removed";
+      await notifyUsers(tx, [participant.userId], {
+        type: "TOURNAMENT_REGISTRATION_REVIEW",
+        title: `Your registration for ${name} was ${verb}`,
+        body: input.decision === "REMOVE" ? `Reason: ${input.reason!.trim()}` : null,
+        link: `/tournaments/${tournamentId}`,
+        dedupeKey: `registration-review:${participant.id}:${input.decision}`,
+      });
+    }
     return tx.tournamentParticipant.update({
       where: { id: participant.id },
       data: {
@@ -371,7 +432,12 @@ export async function closeTournamentRegistration(userId: string, tournamentId: 
   if (!prisma) throw new TournamentError("Database unavailable.", 503);
   const tournament = await assertOrganizer(userId, tournamentId, prisma);
   if (tournament.status !== "OPEN_REGISTRATION") throw new TournamentError("Only open registrations can be closed.", 409);
-  return prisma.tournament.update({ where: { id: tournamentId }, data: { status: "REGISTRATION_CLOSED" } });
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.tournament.update({ where: { id: tournamentId }, data: { status: "REGISTRATION_CLOSED" } });
+    const participants = await tx.tournamentParticipant.findMany({ where: { tournamentId, status: { in: ["APPROVED", "PENDING"] } }, select: { userId: true } });
+    await notifyUsers(tx, participants.map((participant) => participant.userId), { type: "TOURNAMENT_REGISTRATION_CLOSED", title: `Registration closed for ${updated.name}`, body: "The organizer will publish the draw soon.", link: `/tournaments/${tournamentId}`, dedupeKey: `registration-closed:${tournamentId}` });
+    return updated;
+  });
 }
 
 export async function generateTournamentDraw(userId: string, tournamentId: string) {
@@ -427,6 +493,7 @@ export async function generateTournamentDraw(userId: string, tournamentId: strin
       if (fixture.player1Id && fixture.player2Id) await createTournamentFixtureMatch(tx, tournament, fixture);
     }
     await tx.tournament.update({ where: { id: tournamentId }, data: { status: "IN_PROGRESS", drawGeneratedAt: new Date() } });
+    await notifyUsers(tx, tournament.participants.map((participant) => participant.userId), { type: "TOURNAMENT_DRAW", title: `The draw for ${tournament.name} is out`, body: "Check your fixtures and match schedule.", link: `/tournaments/${tournamentId}`, dedupeKey: `draw:${tournamentId}` });
     return { rounds: draw.length, fixtures: fixtures.length };
   });
 }
@@ -446,6 +513,7 @@ export async function scheduleTournamentFixture(userId: string, tournamentId: st
     if (fixture.match && fixture.match.status !== "ABANDONED") {
       if (fixture.match.status !== "SCHEDULED") throw new TournamentError("A match can only be rescheduled before it starts.", 409);
       await tx.match.update({ where: { id: fixture.match.id }, data: { scheduledAt } });
+      await notifyScheduled(tx, fixture.tournament, [fixture.player1Id, fixture.player2Id], fixture.id, scheduledAt);
       return tx.tournamentFixture.update({ where: { id: fixtureId }, data: { scheduledAt, status: "SCHEDULED", version: { increment: 1 } } });
     }
     const requestId = `tournament:${tournamentId}:r${fixture.roundId}:f${fixture.position}:v${fixture.version + 1}`;
@@ -462,7 +530,18 @@ export async function scheduleTournamentFixture(userId: string, tournamentId: st
         notes: `Tournament match: ${fixture.tournament.name}`,
       },
     });
+    await notifyScheduled(tx, fixture.tournament, [fixture.player1Id, fixture.player2Id], fixture.id, scheduledAt);
     return tx.tournamentFixture.update({ where: { id: fixtureId }, data: { matchId: match.id, scheduledAt, status: "SCHEDULED", version: { increment: 1 } } });
+  });
+}
+
+function notifyScheduled(tx: Prisma.TransactionClient, tournament: { id: string; name: string }, players: string[], fixtureId: string, scheduledAt: Date) {
+  return notifyUsers(tx, players, {
+    type: "TOURNAMENT_MATCH_SCHEDULED",
+    title: `Match scheduled in ${tournament.name}`,
+    body: `Your match is scheduled for ${scheduledAt.toUTCString()}.`,
+    link: `/tournaments/${tournament.id}`,
+    dedupeKey: `schedule:${fixtureId}:${scheduledAt.toISOString()}`,
   });
 }
 
@@ -478,7 +557,10 @@ export async function cancelTournament(userId: string, tournamentId: string) {
     const matchIds = fixtures.flatMap((fixture) => fixture.matchId ? [fixture.matchId] : []);
     if (matchIds.length) await tx.match.updateMany({ where: { id: { in: matchIds }, status: { in: ["SCHEDULED", "IN_PROGRESS"] } }, data: { status: "ABANDONED", abandonedAt: now, version: { increment: 1 } } });
     await tx.tournamentFixture.updateMany({ where: { id: { in: fixtures.map((fixture) => fixture.id) } }, data: { status: TournamentFixtureStatus.CANCELLED, version: { increment: 1 } } });
-    return tx.tournament.update({ where: { id: tournamentId }, data: { status: TournamentStatus.CANCELLED } });
+    const cancelled = await tx.tournament.update({ where: { id: tournamentId }, data: { status: TournamentStatus.CANCELLED } });
+    const participants = await tx.tournamentParticipant.findMany({ where: { tournamentId, status: { in: ["APPROVED", "PENDING"] } }, select: { userId: true } });
+    await notifyUsers(tx, participants.map((participant) => participant.userId), { type: "TOURNAMENT_CANCELLED", title: `${cancelled.name} was cancelled`, link: `/tournaments/${tournamentId}`, dedupeKey: `cancelled:${tournamentId}` });
+    return cancelled;
   });
 }
 
