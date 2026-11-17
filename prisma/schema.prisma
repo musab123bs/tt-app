@@ -1,0 +1,413 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlayerRole {
+  PLAYER
+  ADMIN
+  COACH
+  SCORER
+}
+
+enum PlayerLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  PROFESSIONAL
+}
+
+enum PlayingHand {
+  RIGHT_HANDED
+  LEFT_HANDED
+}
+
+enum PlayingStyle {
+  OFFENSIVE
+  DEFENSIVE
+  ALL_ROUND
+}
+
+enum MatchStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum MatchType {
+  SINGLES
+}
+
+enum MatchGameStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum MatchPointAction {
+  POINT
+  UNDO
+}
+
+enum MatchCommandAction {
+  START
+  POINT
+  UNDO
+  CONFIRM_GAME
+  FINISH
+  ABANDON
+}
+
+enum TournamentFormat {
+  SINGLE_ELIMINATION
+  ROUND_ROBIN
+}
+
+enum TournamentStatus {
+  DRAFT
+  OPEN_REGISTRATION
+  REGISTRATION_CLOSED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TournamentParticipantStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  REMOVED
+}
+
+enum TournamentRoundStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum TournamentFixtureStatus {
+  PENDING
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  BYE
+  FORFEIT
+  CANCELLED
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id                          String                  @id @default(cuid())
+  name                        String
+  email                       String                  @unique
+  emailVerified               Boolean                 @default(false)
+  image                       String?
+  role                        PlayerRole              @default(PLAYER)
+  createdAt                   DateTime                @default(now())
+  updatedAt                   DateTime                @updatedAt
+  sessions                    Session[]
+  accounts                    Account[]
+  verifications               Verification[]
+  playerProfile               PlayerProfile?
+  matchesCreated              Match[]                 @relation("MatchCreator")
+  matchesAsPlayer1            Match[]                 @relation("MatchPlayer1")
+  matchesAsPlayer2            Match[]                 @relation("MatchPlayer2")
+  matchesWon                  Match[]                 @relation("MatchWinner")
+  matchesLost                 Match[]                 @relation("MatchLoser")
+  gamesAsFirstServer          MatchGame[]             @relation("GameFirstServer")
+  gamesWon                    MatchGame[]             @relation("GameWinner")
+  pointsAwarded               MatchPoint[]            @relation("MatchPointScorer")
+  pointsServed                MatchPoint[]            @relation("MatchPointServer")
+  pointActions                MatchPoint[]            @relation("MatchPointActor")
+  pointsUndone                MatchPoint[]            @relation("MatchPointUndoneBy")
+  matchCommands               MatchCommand[]
+  tournamentsCreated          Tournament[]            @relation("TournamentOrganizer")
+  tournamentsWon              Tournament[]            @relation("TournamentWinner")
+  tournamentsRunnerUp         Tournament[]            @relation("TournamentRunnerUp")
+  tournamentRegistrations     TournamentParticipant[]
+  tournamentFixturesAsPlayer1 TournamentFixture[]     @relation("TournamentFixturePlayer1")
+  tournamentFixturesAsPlayer2 TournamentFixture[]     @relation("TournamentFixturePlayer2")
+  tournamentFixturesWon       TournamentFixture[]     @relation("TournamentFixtureWinner")
+  tournamentFixturesLost      TournamentFixture[]     @relation("TournamentFixtureLoser")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@unique([identifier, value])
+}
+
+model PlayerProfile {
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName     String
+  profileImage String?
+  publicId     String?
+  bio          String?
+  country      String?
+  city         String?
+  clubName     String?
+  playingHand  PlayingHand?
+  playingStyle PlayingStyle?
+  level        PlayerLevel   @default(BEGINNER)
+  dateOfBirth  DateTime?
+  isPublic     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Match {
+  id                 String             @id @default(cuid())
+  requestId          String             @unique
+  createdById        String
+  createdBy          User               @relation("MatchCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  player1Id          String
+  player1            User               @relation("MatchPlayer1", fields: [player1Id], references: [id], onDelete: Restrict)
+  player2Id          String
+  player2            User               @relation("MatchPlayer2", fields: [player2Id], references: [id], onDelete: Restrict)
+  matchType          MatchType          @default(SINGLES)
+  bestOf             Int
+  scheduledAt        DateTime
+  location           String?
+  notes              String?
+  status             MatchStatus        @default(SCHEDULED)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  abandonedAt        DateTime?
+  durationSeconds    Int?
+  winnerId           String?
+  winner             User?              @relation("MatchWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  loserId            String?
+  loser              User?              @relation("MatchLoser", fields: [loserId], references: [id], onDelete: SetNull)
+  player1GamesWon    Int                @default(0)
+  player2GamesWon    Int                @default(0)
+  player1TotalPoints Int                @default(0)
+  player2TotalPoints Int                @default(0)
+  version            Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  games              MatchGame[]
+  pointHistory       MatchPoint[]
+  commands           MatchCommand[]
+  tournamentFixture  TournamentFixture?
+
+  @@index([player1Id, status, scheduledAt])
+  @@index([player2Id, status, scheduledAt])
+  @@index([winnerId, completedAt])
+}
+
+model MatchGame {
+  id            String          @id @default(cuid())
+  matchId       String
+  match         Match           @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  number        Int
+  firstServerId String
+  firstServer   User            @relation("GameFirstServer", fields: [firstServerId], references: [id], onDelete: Restrict)
+  player1Score  Int             @default(0)
+  player2Score  Int             @default(0)
+  status        MatchGameStatus @default(IN_PROGRESS)
+  winnerId      String?
+  winner        User?           @relation("GameWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  completedAt   DateTime?
+  createdAt     DateTime        @default(now())
+  points        MatchPoint[]
+
+  @@unique([matchId, number])
+  @@index([matchId, status, number])
+}
+
+model MatchPoint {
+  id              String           @id @default(cuid())
+  matchId         String
+  match           Match            @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  gameId          String
+  game            MatchGame        @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  sequence        Int
+  action          MatchPointAction
+  playerAwardedId String?
+  playerAwarded   User?            @relation("MatchPointScorer", fields: [playerAwardedId], references: [id], onDelete: SetNull)
+  serverId        String?
+  server          User?            @relation("MatchPointServer", fields: [serverId], references: [id], onDelete: SetNull)
+  actorId         String
+  actor           User             @relation("MatchPointActor", fields: [actorId], references: [id], onDelete: Restrict)
+  scorePlayer1    Int
+  scorePlayer2    Int
+  requestId       String
+  targetPointId   String?
+  undoneAt        DateTime?
+  undoneById      String?
+  undoneBy        User?            @relation("MatchPointUndoneBy", fields: [undoneById], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+
+  @@unique([matchId, requestId])
+  @@unique([gameId, sequence])
+  @@index([matchId, gameId, sequence])
+  @@index([gameId, action, undoneAt, sequence])
+}
+
+model MatchCommand {
+  id        String             @id @default(cuid())
+  matchId   String
+  match     Match              @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  requestId String
+  action    MatchCommandAction
+  actorId   String
+  actor     User               @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  createdAt DateTime           @default(now())
+
+  @@unique([matchId, requestId])
+  @@index([matchId, createdAt])
+}
+
+model Tournament {
+  id                           String                  @id @default(cuid())
+  createdById                  String
+  createdBy                    User                    @relation("TournamentOrganizer", fields: [createdById], references: [id], onDelete: Restrict)
+  name                         String
+  description                  String?
+  bannerImage                  String?
+  location                     String?
+  startDate                    DateTime
+  endDate                      DateTime
+  registrationDeadline         DateTime
+  format                       TournamentFormat
+  status                       TournamentStatus        @default(DRAFT)
+  maxParticipants              Int
+  minParticipants              Int                     @default(2)
+  bestOf                       Int                     @default(5)
+  registrationRequiresApproval Boolean                 @default(false)
+  rules                        String?
+  tieBreakOrder                String                  @default("MATCH_WIN_PERCENTAGE,HEAD_TO_HEAD,GAME_DIFFERENCE,POINT_DIFFERENCE")
+  drawGeneratedAt              DateTime?
+  completedAt                  DateTime?
+  winnerId                     String?
+  winner                       User?                   @relation("TournamentWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  runnerUpId                   String?
+  runnerUp                     User?                   @relation("TournamentRunnerUp", fields: [runnerUpId], references: [id], onDelete: SetNull)
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
+  participants                 TournamentParticipant[]
+  rounds                       TournamentRound[]
+  fixtures                     TournamentFixture[]
+
+  @@index([status, registrationDeadline, startDate])
+  @@index([createdById, status])
+  @@index([winnerId, completedAt])
+}
+
+model TournamentParticipant {
+  id            String                      @id @default(cuid())
+  tournamentId  String
+  tournament    Tournament                  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User                        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  status        TournamentParticipantStatus @default(PENDING)
+  seed          Int?
+  registeredAt  DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+  removedAt     DateTime?
+  removedReason String?
+
+  @@unique([tournamentId, userId])
+  @@unique([tournamentId, seed])
+  @@index([tournamentId, status, registeredAt])
+  @@index([userId, status, registeredAt])
+}
+
+model TournamentRound {
+  id           String                @id @default(cuid())
+  tournamentId String
+  tournament   Tournament            @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  number       Int
+  label        String
+  status       TournamentRoundStatus @default(PENDING)
+  createdAt    DateTime              @default(now())
+  fixtures     TournamentFixture[]
+
+  @@unique([tournamentId, number])
+  @@index([tournamentId, status, number])
+}
+
+model TournamentFixture {
+  id                String                  @id @default(cuid())
+  tournamentId      String
+  tournament        Tournament              @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  roundId           String
+  round             TournamentRound         @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  position          Int
+  player1Id         String?
+  player1Withdrawn  Boolean                 @default(false)
+  player1           User?                   @relation("TournamentFixturePlayer1", fields: [player1Id], references: [id], onDelete: SetNull)
+  player2Id         String?
+  player2Withdrawn  Boolean                 @default(false)
+  player2           User?                   @relation("TournamentFixturePlayer2", fields: [player2Id], references: [id], onDelete: SetNull)
+  winnerId          String?
+  winner            User?                   @relation("TournamentFixtureWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  loserId           String?
+  loser             User?                   @relation("TournamentFixtureLoser", fields: [loserId], references: [id], onDelete: SetNull)
+  matchId           String?                 @unique
+  match             Match?                  @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  scheduledAt       DateTime?
+  status            TournamentFixtureStatus @default(PENDING)
+  version           Int                     @default(0)
+  resultProcessedAt DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  @@unique([roundId, position])
+  @@index([tournamentId, status, scheduledAt])
+  @@index([player1Id, status])
+  @@index([player2Id, status])
+}
